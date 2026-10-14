@@ -1,6 +1,7 @@
 """mini-harness: a minimal agent loop with one bash tool."""
 import json
 import os
+import platform
 import subprocess
 import sys
 from pathlib import Path
@@ -12,7 +13,11 @@ HERE = Path(__file__).parent
 load_dotenv(HERE / ".env")
 client = OpenAI(base_url=os.environ["BASE_URL"], api_key=os.environ["API_KEY"])
 MODEL = os.environ["MODEL"]
-SYSTEM_PROMPT = (HERE / "system_prompt.md").read_text()
+# Tell the model where it is: commands run in the folder the harness was started from.
+SYSTEM_PROMPT = (HERE / "system_prompt.md").read_text() + (
+    f"\n\n## Environment\n- Working folder: {os.getcwd()}\n- Home folder: {Path.home()}\n"
+    f"- OS: {platform.platform()}\n"
+)
 
 
 TIMEOUT = 60  # seconds per command
