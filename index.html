@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mini-harness</title>
+<style>
+  :root { --bg: #f7f7f5; --card: #fff; --text: #1d1d1f; --muted: #6b6b70; --line: #e2e2e0;
+          --accent: #2563eb; --ok: #15803d; --no: #b91c1c; --code: #f1f1ee; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161618; --card: #1f1f22; --text: #ececee; --muted: #9a9aa0; --line: #2e2e33;
+            --accent: #60a5fa; --ok: #4ade80; --no: #f87171; --code: #26262a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
+  header { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: baseline; }
+  header b { font-size: 16px; } header span { color: var(--muted); font-size: 13px; }
+  #log { max-width: 820px; margin: 0 auto; padding: 16px 16px 120px; }
+  .msg { margin: 12px 0; padding: 10px 14px; border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .user { background: var(--accent); color: #fff; margin-left: 20%; }
+  .text { background: var(--card); border: 1px solid var(--line); }
+  .error { background: var(--card); border: 1px solid var(--no); color: var(--no); }
+  .tool { background: var(--card); border: 1px solid var(--line); border-radius: 10px; margin: 12px 0; overflow: hidden; }
+  .tool code { display: block; padding: 8px 12px; font: 13px/1.4 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .tool .cmd { background: var(--code); } .tool .cmd::before { content: "$ "; color: var(--muted); }
+  .tool .out { max-height: 260px; overflow: auto; color: var(--muted); border-top: 1px solid var(--line); }
+  .tool .bar { padding: 6px 12px; display: flex; gap: 8px; align-items: center; font-size: 13px; border-top: 1px solid var(--line); }
+  button { font: inherit; padding: 4px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--text); cursor: pointer; }
+  button.yes { border-color: var(--ok); color: var(--ok); } button.no { border-color: var(--no); color: var(--no); }
+  .usage { color: var(--muted); font: 12px ui-monospace, monospace; margin: 4px 2px; }
+  form { position: fixed; bottom: 0; left: 0; right: 0; background: var(--bg); border-top: 1px solid var(--line); padding: 12px 16px; }
+  form div { max-width: 820px; margin: 0 auto; display: flex; gap: 8px; }
+  textarea { flex: 1; font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--text); resize: none; }
+  #send { background: var(--accent); color: #fff; border: none; }
+  #send:disabled { opacity: .5; }
+</style>
+</head>
+<body>
+<header><b>mini-harness</b><span id="model"></span></header>
+<div id="log"></div>
+<form id="form"><div>
+  <textarea id="input" rows="2" placeholder="Ask something… (Enter to send, Shift+Enter for a new line)"></textarea>
+  <button id="send" type="submit">Send</button>
+</div></form>
+<script>
+const log = document.getElementById("log"), input = document.getElementById("input"), send = document.getElementById("send");
+let seen = 0, lastTool = null;
+
+function add(cls, text, tag = "div") {
+  const el = document.createElement(tag); el.className = cls; el.textContent = text; log.appendChild(el); return el;
+}
+
+function render(ev) {
+  const d = ev.data;
+  if (ev.kind === "user") { add("msg user", d); send.disabled = true; }
+  else if (ev.kind === "text") add("msg text", d || "(no text)");
+  else if (ev.kind === "error") add("msg error", d);
+  else if (ev.kind === "usage") add("usage", d);
+  else if (ev.kind === "command") {
+    lastTool = add("tool", "");
+    lastTool.appendChild(Object.assign(document.createElement("code"), { className: "cmd", textContent: d }));
+  } else if (ev.kind === "approve") {
+    const bar = document.createElement("div"); bar.className = "bar";
+    const yes = Object.assign(document.createElement("button"), { className: "yes", textContent: "Approve" });
+    const no = Object.assign(document.createElement("button"), { className: "no", textContent: "Deny" });
+    const decide = ok => { bar.textContent = ok ? "approved" : "denied";
+      fetch("/approve", { method: "POST", body: JSON.stringify({ id: d.id, ok }) }); };
+    yes.onclick = () => decide(true); no.onclick = () => decide(false);
+    bar.append(yes, no); lastTool.appendChild(bar); yes.focus();
+  } else if (ev.kind === "result") {
+    lastTool.appendChild(Object.assign(document.createElement("code"), { className: "out", textContent: d }));
+  } else if (ev.kind === "done") { send.disabled = false; input.focus(); }
+}
+
+async function poll() {
+  try {
+    const r = await (await fetch("/events?since=" + seen)).json();
+    document.getElementById("model").textContent = r.model;
+    r.events.forEach(render); seen += r.events.length;
+    if (r.events.length) window.scrollTo(0, document.body.scrollHeight);
+  } catch (e) { /* server restarting; try again */ }
+  setTimeout(poll, 400);
+}
+
+document.getElementById("form").onsubmit = e => {
+  e.preventDefault();
+  const text = input.value.trim(); if (!text || send.disabled) return;
+  input.value = ""; fetch("/send", { method: "POST", body: JSON.stringify({ text }) });
+};
+input.onkeydown = e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); document.getElementById("form").requestSubmit(); } };
+poll();
+</script>
+</body>
+</html>
