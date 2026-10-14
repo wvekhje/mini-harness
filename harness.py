@@ -2,6 +2,7 @@
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -58,7 +59,7 @@ def usage_line(usage):
 MAX_ROUNDS = 20  # tool rounds per question, so a confused model can't loop forever
 
 
-def agent_turn(messages, show):
+def agent_turn(messages, show, approve):
     """THE AGENT LOOP. Call the model; while it asks for tools, run them and call again; stop at text."""
     for _ in range(MAX_ROUNDS):
         reply = client.chat.completions.create(model=MODEL, messages=messages, tools=[BASH_TOOL])  # 1. call
@@ -71,7 +72,10 @@ def agent_turn(messages, show):
         for call in msg.tool_calls:  # 4. tool calls: run each, append its result, then loop
             command = json.loads(call.function.arguments)["command"]
             show("command", command)
-            result = run_bash(command)
+            if approve(command):  # 5. the user decides; a "no" is itself a result the model sees
+                result = run_bash(command)
+            else:
+                result = "The user declined to run this command."
             show("result", result)
             messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
     show("text", f"(Stopped after {MAX_ROUNDS} tool rounds.)")
@@ -82,9 +86,17 @@ def show_terminal(kind, data):
            "result": "  " + data.replace("\n", "\n  ")}[kind])
 
 
+def approve_terminal(command):
+    try:
+        return input("  run it? [y/N] ").strip().lower() in ("y", "yes")
+    except EOFError:
+        return False
+
+
 def main():
+    auto = "--yes" in sys.argv  # approve everything; off unless you ask for it
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    print(f"mini-harness · {MODEL} · Ctrl-D to quit")
+    print(f"mini-harness · {MODEL} · Ctrl-D to quit" + (" · AUTO-APPROVE ON" if auto else ""))
     while True:
         try:
             user = input("\nyou> ").strip()
@@ -92,7 +104,7 @@ def main():
             break
         if user:
             messages.append({"role": "user", "content": user})
-            agent_turn(messages, show_terminal)
+            agent_turn(messages, show_terminal, (lambda c: True) if auto else approve_terminal)
 
 
 if __name__ == "__main__":
